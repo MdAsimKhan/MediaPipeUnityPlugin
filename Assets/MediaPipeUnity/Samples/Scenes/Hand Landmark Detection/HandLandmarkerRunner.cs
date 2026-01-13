@@ -151,9 +151,19 @@ namespace Mediapipe.Unity.Sample.HandLandmarkDetection
       }
     }
 
-    private void OnHandLandmarkDetectionOutput(HandLandmarkerResult result, Image image, long timestamp)
+    private ASLGoodbyeDetector goodbyeDetector = new ASLGoodbyeDetector();
+
+    private void OnHandLandmarkDetectionOutput(
+    HandLandmarkerResult result,
+    Image image,
+    long timestamp)
     {
       _handLandmarkerResultAnnotationController.DrawLater(result);
+
+      if (goodbyeDetector.Detect(result, timestamp))
+      {
+        Debug.Log("ASL GOODBYE detected");
+      }
     }
   }
 }
