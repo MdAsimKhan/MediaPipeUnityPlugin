@@ -8,20 +8,22 @@ namespace Mediapipe.Unity.Sample.HandLandmarkDetection
   {
     enum State
     {
-      None,
-      OpenDetected
+      Idle,
+      OpenDetected,   // Phase 1: Hand is clearly open
+      ClosingDetected // Phase 2: Hand has closed (mid-wave)
     }
 
-    State state = State.None;
-    float timer = 0f;
-  long lastTimestamp = -1;
+    State state = State.Idle;
 
-    const float OPEN_THRESHOLD = 0.12f;
-    const float CLOSED_THRESHOLD = 0.075f;
-    const float MAX_TIME = 1.2f;
     int openFrames = 0;
-    const int MIN_OPEN_FRAMES = 5; // ~0.15s at 30fps
-    float openReference = -1f;
+    float timer = 0f;
+    float highOpennessRef = -1f; // The "High" point of the wave
+    long lastTimestamp = -1;
+
+    // --- Config ---
+    const float WAVE_TIMEOUT = 1.5f; // Max time to complete Open->Close->Open
+    const int MIN_OPEN_FRAMES = 5;
+    const bool IS_CAMERA_MIRRORED = true; // Set true for webcams
 
     public bool Detect(HandLandmarkerResult result, long timestampMillisec)
     {
@@ -31,36 +33,44 @@ namespace Mediapipe.Unity.Sample.HandLandmarkDetection
         return false;
       }
 
-      var lm = result.handLandmarks[0]; // single hand (ASL is one-handed)
+      var lm = result.handLandmarks[0];
 
-      if (!IsPalmFacingCamera(lm))
+      // 1. Handedness Logic (Match MP view to Reality)
+      string mpLabel = "Left";
+      if (result.handedness != null && result.handedness.Count > 0 && result.handedness[0].categories.Count > 0)
+      {
+        mpLabel = result.handedness[0].categories[0].categoryName;
+      }
+      string userLabel = (mpLabel == "Right") ? "Left" : "Right";
+
+      // 2. Palm Facing Check
+      if (!IsPalmFacingCamera(lm, mpLabel))
       {
         Reset();
         return false;
       }
 
-    float openness = HandOpenness(lm);
-      //Debug.Log($"[Goodbye] openness={openness:F3}, timer={timer:F2}");
+      // 3. Openness Calculation
+      float openness = HandOpenness(lm);
 
+      // 4. Time Delta
       float delta = 0f;
-    if (lastTimestamp != -1)
-    {
-      delta = (timestampMillisec - lastTimestamp) / 1000f;
-    }
-    lastTimestamp = timestampMillisec;
-    timer += delta;
+      if (lastTimestamp != -1) delta = (timestampMillisec - lastTimestamp) / 1000f;
+      lastTimestamp = timestampMillisec;
 
+      // 5. CYCLIC STATE MACHINE
       switch (state)
       {
-        case State.None:
-          if (openness > 0.25f)   // clearly open (you said max ~0.35)
+        case State.Idle:
+          // Step 1: Detect Open Hand
+          if (openness > 0.25f)
           {
             openFrames++;
-
             if (openFrames >= MIN_OPEN_FRAMES)
             {
-              openReference = openness;
+              highOpennessRef = openness;
               state = State.OpenDetected;
+              timer = 0f;
             }
           }
           else
@@ -70,14 +80,40 @@ namespace Mediapipe.Unity.Sample.HandLandmarkDetection
           break;
 
         case State.OpenDetected:
-          // fingers bend noticeably (not fist)
-          if (openness < openReference * 0.6f)
+          timer += delta;
+
+          // Step 2: Detect Closing (The dip in the wave)
+          // Must close significantly ( < 60% of original open size)
+          if (openness < highOpennessRef * 0.6f)
           {
-            Reset();
-            Debug.Log($"👋 Goodbye detected (open={openReference:F2}, close={openness:F2})");
+            state = State.ClosingDetected;
+            // Keep timer running; don't reset it
+          }
+
+          // Timeout if hand stays open too long without waving
+          if (timer > WAVE_TIMEOUT) Reset();
+          break;
+
+        case State.ClosingDetected:
+          timer += delta;
+
+          // Step 3: Detect Re-Opening (The finish of the wave)
+          // We don't need it to be 100% open, just ~85% of the start
+          if (openness > highOpennessRef * 0.85f)
+          {
+            Debug.Log($"👋 Goodbye (Wave) Detected on {userLabel} Hand");
+            Reset(); // Reset to detect next wave
             return true;
           }
 
+          // TIMEOUT / FAIL SAFE:
+          // If you hold the closed state too long (e.g., > 0.8s), 
+          // you are likely making a FIST for "Yes", not waving.
+          // This is the critical fix for the conflict.
+          if (timer > WAVE_TIMEOUT || (timer > 0.8f && openness < 0.15f))
+          {
+            Reset();
+          }
           break;
       }
 
@@ -86,39 +122,34 @@ namespace Mediapipe.Unity.Sample.HandLandmarkDetection
 
     void Reset()
     {
-      state = State.None;
+      state = State.Idle;
       openFrames = 0;
-      openReference = -1f;
+      highOpennessRef = -1f;
+      timer = 0f;
     }
-
 
     // ---------- Helpers ----------
 
-    bool IsPalmFacingCamera(NormalizedLandmarks lm)
+    bool IsPalmFacingCamera(NormalizedLandmarks lm, string rawMpLabel)
     {
       Vector3 wrist = ToV3(lm.landmarks[0]);
       Vector3 indexBase = ToV3(lm.landmarks[5]);
       Vector3 pinkyBase = ToV3(lm.landmarks[17]);
 
-      Vector3 normal = Vector3.Cross(
-          indexBase - wrist,
-          pinkyBase - wrist
-      ).normalized;
+      Vector3 normal = Vector3.Cross(indexBase - wrist, pinkyBase - wrist).normalized;
 
-      return normal.z < -0.2f;
+      if (rawMpLabel == "Left") return normal.z > 0.2f;
+      else return normal.z < -0.2f;
     }
-
 
     float HandOpenness(NormalizedLandmarks lm)
     {
       Vector3 wrist = ToV3(lm.landmarks[0]);
-
       float sum =
           Vector3.Distance(ToV3(lm.landmarks[8]), wrist) +
           Vector3.Distance(ToV3(lm.landmarks[12]), wrist) +
           Vector3.Distance(ToV3(lm.landmarks[16]), wrist) +
           Vector3.Distance(ToV3(lm.landmarks[20]), wrist);
-
       return sum / 4f;
     }
 

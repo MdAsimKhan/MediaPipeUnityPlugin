@@ -13,6 +13,9 @@ namespace Mediapipe.Unity.Sample.HandLandmarkDetection
 {
   public class HandLandmarkerRunner : VisionTaskApiRunner<HandLandmarker>
   {
+    public bool detectGoodbye = true;
+    public bool detectYesNo = true;
+
     [SerializeField] private HandLandmarkerResultAnnotationController _handLandmarkerResultAnnotationController;
 
     private Experimental.TextureFramePool _textureFramePool;
@@ -35,6 +38,7 @@ namespace Mediapipe.Unity.Sample.HandLandmarkDetection
       Debug.Log($"MinHandDetectionConfidence = {config.MinHandDetectionConfidence}");
       Debug.Log($"MinHandPresenceConfidence = {config.MinHandPresenceConfidence}");
       Debug.Log($"MinTrackingConfidence = {config.MinTrackingConfidence}");
+      config.NumHands = 2;
 
       yield return AssetLoader.PrepareAssetAsync(config.ModelPath);
 
@@ -151,18 +155,32 @@ namespace Mediapipe.Unity.Sample.HandLandmarkDetection
       }
     }
 
-    private ASLGoodbyeDetector goodbyeDetector = new ASLGoodbyeDetector();
+    ASLGoodbyeDetector goodbyeDetector = new ASLGoodbyeDetector();
+    ASLYesNoDetector yesNoDetector = new ASLYesNoDetector();
 
-    private void OnHandLandmarkDetectionOutput(
-    HandLandmarkerResult result,
-    Image image,
-    long timestamp)
+    private void OnHandLandmarkDetectionOutput(HandLandmarkerResult result, Image image, long timestamp)
     {
       _handLandmarkerResultAnnotationController.DrawLater(result);
 
-      if (goodbyeDetector.Detect(result, timestamp))
+      if (detectGoodbye)
       {
-        Debug.Log("ASL GOODBYE detected");
+        if (goodbyeDetector.Detect(result, timestamp))
+        {
+          Debug.Log("ASL GOODBYE detected");
+        }
+      }
+      
+      if(detectYesNo)
+      {
+        var gesture = yesNoDetector.Detect(result, System.DateTime.Now.Ticks / 10000);
+        if (gesture == ASLYesNoDetector.DetectedGesture.Yes)
+        {
+          Debug.Log("ASL YES detected");
+        }
+        else if (gesture == ASLYesNoDetector.DetectedGesture.No)
+        {
+          Debug.Log("ASL NO detected");
+        }
       }
     }
   }
